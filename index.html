@@ -111,13 +111,20 @@ function waitForIceGathering(pc) {
 }
 
 async function connect() {
-  const raw = document.getElementById('offerIn').value.trim();
+  // Strip any whitespace/line breaks that messaging apps sometimes insert into long pasted text.
+  const raw = document.getElementById('offerIn').value.replace(/\s+/g, '');
   if (!raw) return showToast('Paste the code from the computer first');
   const btn = document.getElementById('connectBtn');
   btn.disabled = true; btn.textContent = 'Connecting...';
+  let offer;
   try {
-    const offer = JSON.parse(atob(raw));
-
+    offer = JSON.parse(atob(raw));
+  } catch (e) {
+    showToast('That code looks invalid — re-copy it fully from the computer');
+    btn.disabled = false; btn.textContent = 'Connect Camera';
+    return;
+  }
+  try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment' },
       audio: false
