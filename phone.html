@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phone — Camera Sender</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b1120; --panel: #161f38; --panel2: #1e2a4a; --border: #2c3a5c;
+    --text: #e6ebf5; --muted: #8b98b8; --accent: #4f7fff; --accent-hover: #3d6bef;
+    --good: #22c55e; --bad: #ef4444; --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body { font-family:'Inter', system-ui, sans-serif; background: linear-gradient(160deg,#0b1120,#0f1730); color: var(--text); margin:0; padding:18px; min-height:100vh; }
+  h1 { font-size:1.25rem; margin:0 0 4px; }
+  .subtitle { color: var(--muted); font-size:0.85rem; margin-bottom:18px; }
+  .card { background: var(--panel); border:1px solid var(--border); border-radius:16px; padding:18px; margin-bottom:16px; box-shadow: 0 4px 20px rgba(0,0,0,0.25); }
+  .step-label { font-size:0.82rem; color: var(--muted); margin:0 0 8px; font-weight:500; }
+  .code-row { display:flex; gap:8px; }
+  textarea { flex:1; background: var(--bg); color: var(--text); border:1px solid var(--border); border-radius:10px; padding:10px 12px; font-size:0.82rem; font-family: ui-monospace, monospace; height:90px; resize:vertical; }
+  button { background: var(--accent); color:white; border:none; padding:13px 16px; border-radius:10px; cursor:pointer; font-size:1rem; font-weight:600; width:100%; margin-top:10px; transition: background 0.15s, transform 0.05s; }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:active:not(:disabled) { transform: scale(0.98); }
+  button:disabled { background:#334155; color:#64748b; }
+  button.ghost { background: var(--panel2); width:auto; flex-shrink:0; margin-top:0; padding:10px 14px; }
+  video { width:100%; background:#000; border-radius:10px; margin-top:12px; display:block; }
+  .badge { display:inline-flex; align-items:center; gap:6px; font-size:0.78rem; padding:4px 10px; border-radius:999px; background: var(--panel2); color: var(--muted); font-weight:500; }
+  .dot { width:8px; height:8px; border-radius:50%; background: var(--muted); flex-shrink:0; }
+  .dot.good { background: var(--good); box-shadow: 0 0 8px var(--good); }
+  .dot.bad { background: var(--bad); }
+  .dot.warn { background: var(--warn); }
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background: var(--good); color:#052e16; padding:10px 18px; border-radius:10px; font-weight:600; font-size:0.85rem; opacity:0; transition: opacity 0.25s; pointer-events:none; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<h1>📱 Phone — Camera Sender</h1>
+<div class="subtitle">Turns this phone into a webcam for the computer.</div>
+
+<div class="card">
+  <div class="step-label">Step 1 — Paste the code from the computer</div>
+  <div class="code-row">
+    <textarea id="offerIn" placeholder="Paste the computer's connection code"></textarea>
+    <button class="ghost" onclick="pasteInto('offerIn')">📥</button>
+  </div>
+  <button id="connectBtn" onclick="connect()">Connect Camera</button>
+</div>
+
+<div class="card">
+  <div class="step-label">Step 2 — Copy this reply and send it back to the computer</div>
+  <div class="code-row">
+    <textarea id="answerOut" placeholder="Reply code will appear here..." readonly></textarea>
+    <button class="ghost" onclick="copyText('answerOut')">📋</button>
+  </div>
+</div>
+
+<div class="badge"><span class="dot" id="connDot"></span><span id="connLabel">Not connected</span></div>
+<video id="localVideo" autoplay playsinline muted></video>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+function copyText(id) {
+  const el = document.getElementById(id);
+  if (!el.value) return showToast('Nothing to copy yet');
+  navigator.clipboard.writeText(el.value).then(() => showToast('Copied!'))
+    .catch(() => { el.select(); document.execCommand('copy'); showToast('Copied!'); });
+}
+
+async function pasteInto(id) {
+  try {
+    const text = await navigator.clipboard.readText();
+    document.getElementById(id).value = text;
+  } catch (e) {
+    showToast('Paste manually — clipboard access blocked');
+  }
+}
+
+function setConnStatus(state) {
+  const dot = document.getElementById('connDot');
+  const label = document.getElementById('connLabel');
+  dot.className = 'dot';
+  if (state === 'connected') { dot.classList.add('good'); label.textContent = 'Connected'; }
+  else if (state === 'failed' || state === 'disconnected' || state === 'closed') { dot.classList.add('bad'); label.textContent = 'Disconnected'; }
+  else if (state === 'connecting') { dot.classList.add('warn'); label.textContent = 'Connecting...'; }
+  else { label.textContent = 'Not connected'; }
+}
+
+let pc;
+
+function waitForIceGathering(pc) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') return resolve();
+    function check() {
+      if (pc.iceGatheringState === 'complete') {
+        pc.removeEventListener('icegatheringstatechange', check);
+        resolve();
+      }
+    }
+    pc.addEventListener('icegatheringstatechange', check);
+  });
+}
+
+async function connect() {
+  const raw = document.getElementById('offerIn').value.trim();
+  if (!raw) return showToast('Paste the code from the computer first');
+  const btn = document.getElementById('connectBtn');
+  btn.disabled = true; btn.textContent = 'Connecting...';
+  try {
+    const offer = JSON.parse(atob(raw));
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' },
+      audio: false
+    });
+    document.getElementById('localVideo').srcObject = stream;
+
+    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    pc.onconnectionstatechange = () => setConnStatus(pc.connectionState);
+    setConnStatus('connecting');
+
+    await pc.setRemoteDescription(offer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitForIceGathering(pc);
+
+    document.getElementById('answerOut').value = btoa(JSON.stringify(pc.localDescription));
+    showToast('Reply ready — copy it to the computer');
+  } catch (err) {
+    if (err.name === 'NotAllowedError') showToast('Camera access denied — allow it in browser settings');
+    else if (err.name === 'NotFoundError') showToast('No camera found on this device');
+    else showToast('Error: ' + err.message);
+    setConnStatus('failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Connect Camera';
+  }
+}
+</script>
+</body>
+</html>
