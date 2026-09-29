@@ -196,13 +196,21 @@ async function flipCamera() {
   const btn = document.getElementById('flipBtn');
   const wanted = currentFacing === 'environment' ? 'user' : 'environment';
   btn.disabled = true;
+  const oldStream = activeStream;
+
+  // Most phones can only have ONE camera stream open at a time — front and back
+  // can't both be active. So release the current camera FIRST, then request the
+  // new one. (Requesting the new one before releasing the old one is what caused
+  // "Could not switch camera" errors — the hardware refused the second stream.)
+  if (oldStream) { try { oldStream.getTracks().forEach(t => t.stop()); } catch (e) {} }
+  activeStream = null;
+
   try {
     const newStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: wanted },
       audio: false
     });
     const newTrack = newStream.getVideoTracks()[0];
-    const oldTrack = activeStream ? activeStream.getVideoTracks()[0] : null;
 
     // If already connected, swap the live track on the existing connection so the
     // computer sees the new camera instantly with no reconnect / new code needed.
@@ -211,16 +219,29 @@ async function flipCamera() {
       if (sender) await sender.replaceTrack(newTrack);
     }
 
-    if (oldTrack) { try { oldTrack.stop(); } catch (e) {} }
     activeStream = newStream;
     document.getElementById('localVideo').srcObject = activeStream;
     currentFacing = wanted;
     showToast(wanted === 'user' ? 'Switched to front camera' : 'Switched to back camera');
   } catch (err) {
+    // The new camera failed to open — try to get the ORIGINAL facing back so the
+    // call doesn't just go blank (the old stream was already released above).
+    try {
+      const restored = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacing }, audio: false });
+      activeStream = restored;
+      document.getElementById('localVideo').srcObject = activeStream;
+      if (pc) {
+        const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (sender) await sender.replaceTrack(restored.getVideoTracks()[0]);
+      }
+    } catch (e2) { /* nothing we can do — leave localVideo blank rather than throw */ }
+
     if (err.name === 'NotFoundError' || err.name === 'OverconstrainedError') {
       showToast('This device only has one camera', true);
     } else if (err.name === 'NotAllowedError') {
       showToast('Camera access denied — allow it in browser settings', true);
+    } else if (err.name === 'NotReadableError') {
+      showToast('Camera busy — close any other app using it and try again', true);
     } else {
       showToast('Could not switch camera: ' + err.message, true);
     }
